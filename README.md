@@ -101,7 +101,7 @@ This stack comes with a workflow to set up CI/CD for projects that can be found 
 
 `.github/workflows/deploy-cicd.yml`.
 
-this is a sample change
+this is a sample change.
 
 To set up CI/CD for projects that were created through MLOps Stacks with the `Project_Only` parameter, 
 run the above mentioned workflow, specifying the `project_name` as a parameter. For example, for the monorepo case:
