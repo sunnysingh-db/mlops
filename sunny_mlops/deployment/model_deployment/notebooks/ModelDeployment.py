@@ -25,7 +25,7 @@
 # Provide them via DB widgets or notebook arguments.
 #
 # Name of the current environment
-dbutils.widgets.dropdown("env", "None", ["None", "staging", "prod"], "Environment Name")
+dbutils.widgets.dropdown("env", "dev_sunny", ["dev_sunny", "staging", "prod"], "Environment Name")
 
 # COMMAND ----------
 
@@ -35,10 +35,12 @@ notebook_path =  '/Workspace/' + os.path.dirname(dbutils.notebook.entry_point.ge
 %cd $notebook_path
 %cd ..
 sys.path.append("../..")
+sys.path.append("../deployment/model_deployment")
 
 # COMMAND ----------
 
-from deploy import deploy
+from deploy1 import deploy
+import mlflow
 
 model_uri = dbutils.jobs.taskValues.get("Train", "model_uri", debugValue="")
 env = dbutils.widgets.get("env")
@@ -47,6 +49,7 @@ assert model_uri != "", "model_uri notebook parameter must be specified"
 deploy(model_uri, env)
 
 # COMMAND ----------
+
 print(
     f"Successfully completed model deployment for {model_uri}"
 )
