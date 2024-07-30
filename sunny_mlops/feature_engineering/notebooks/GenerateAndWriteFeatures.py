@@ -150,8 +150,14 @@ spec = OnlineTableSpec(
   source_table_full_name=output_table_name,
   run_triggered=OnlineTableSpecTriggeredSchedulingPolicy.from_dict({'triggered': 'true'})
 )
-if spark.catalog.tableExists(output_table_name) == False:
-  w.online_tables.create(name=f"{output_table_name}_online", spec=spec)
+
+# COMMAND ----------
+
+try:
+    pprint(w.online_tables.get(f"{output_table_name}_online"))
+except:
+    w.online_tables.create(name=f"{output_table_name}_online", spec=spec)
+    pprint(w.online_tables.get(f"{output_table_name}_online"))
 
 # COMMAND ----------
 
