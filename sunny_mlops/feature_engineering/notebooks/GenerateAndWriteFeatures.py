@@ -38,20 +38,19 @@ dbutils.widgets.text("input_start_date", "", label="Input Start Date")
 dbutils.widgets.text("input_end_date", "", label="Input End Date")
 # Timestamp column. Will be used to filter input start/end dates.
 # This column is also used as a timestamp key of the feature table.
-dbutils.widgets.text(
-    "timestamp_column", "tpep_pickup_datetime", label="Timestamp column"
+dbutils.widgets.dropdown(
+    "timestamp_column", "tpep_pickup_datetime",["tpep_pickup_datetime","tpep_dropoff_datetime"], label="Timestamp column"
 )
 
 # Feature table to store the computed features.
-dbutils.widgets.text(
-    "output_table_name",
-    "dev.sunny_mlops.trip_pickup_features",
-    label="Output Feature Table Name",
+dbutils.widgets.dropdown(
+    "output_table_name","dev_sunny.sunny_mlops.trip_pickup_features",["dev_sunny.sunny_mlops.trip_dropoff_features","dev_sunny.sunny_mlops.trip_pickup_features"],
+    label="Output Feature Table Name"
 )
 
 # Feature transform module name.
-dbutils.widgets.text(
-    "features_transform_module", "pickup_features", label="Features transform file."
+dbutils.widgets.dropdown(
+    "features_transform_module", "pickup_features",["pickup_features","dropoff_features"], label="Features transform file."
 )
 # Primary Keys columns for the feature table;
 dbutils.widgets.text(
@@ -132,6 +131,27 @@ fe.write_table(
     df=features_df,
     mode="merge",
 )
+
+# COMMAND ----------
+
+spark.sql(f"ALTER TABLE {output_table_name} SET TBLPROPERTIES (delta.enableChangeDataFeed = true)")
+
+# COMMAND ----------
+
+from pprint import pprint
+from databricks.sdk import WorkspaceClient
+from databricks.sdk.service.catalog import *
+
+w = WorkspaceClient()
+
+# Create an online table
+spec = OnlineTableSpec(
+  primary_key_columns=[x.strip() for x in pk_columns.split(",")] + [ts_column],
+  source_table_full_name=output_table_name,
+  run_triggered=OnlineTableSpecTriggeredSchedulingPolicy.from_dict({'triggered': 'true'})
+)
+if spark.catalog.tableExists(output_table_name) == False:
+  w.online_tables.create(name=f"{output_table_name}_online", spec=spec)
 
 # COMMAND ----------
 
