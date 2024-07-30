@@ -1,5 +1,5 @@
 # Databricks notebook source
-# MAGIC %pip install databricks-sdk databricks
+# MAGIC %pip install databricks-sdk --upgrade
 # MAGIC dbutils.library.restartPython()
 
 # COMMAND ----------
