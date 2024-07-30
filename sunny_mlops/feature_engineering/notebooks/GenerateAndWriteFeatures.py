@@ -1,4 +1,9 @@
 # Databricks notebook source
+# MAGIC %pip install databricks-sdk databricks
+# MAGIC dbutils.library.restartPython()
+
+# COMMAND ----------
+
 ##################################################################################
 # Generate and Write Features Notebook
 #
@@ -141,6 +146,7 @@ spark.sql(f"ALTER TABLE {output_table_name} SET TBLPROPERTIES (delta.enableChang
 from pprint import pprint
 from databricks.sdk import WorkspaceClient
 from databricks.sdk.service.catalog import *
+from databricks.sdk.service.catalog import OnlineTableSpec, OnlineTableSpecTriggeredSchedulingPolicy
 
 w = WorkspaceClient()
 
