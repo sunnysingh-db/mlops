@@ -65,7 +65,7 @@ def deploy(model_uri, env):
     # Convert the model version to string
     model_version = str(model_version_info.version)
 
-    endpoint_name = f"{model_name.split('.')[-1]}-endpoint"
+    endpoint_name = f"{env}-mlops-endpoint"
 
 
     try:
@@ -90,8 +90,6 @@ def deploy(model_uri, env):
             time.sleep(60)
         print(f"Endpoint is updated! Model {model_name} with version {model_version} is now in production")
 
-        client.delete_registered_model_alias(name=f"{model_name}", alias=target_alias)
-        client.delete_registered_model_alias(name=f"{model_name}", alias="production")
         client.set_registered_model_alias(
                     name=f"{model_name}", alias="production", version=int(model_version))
         
@@ -118,11 +116,7 @@ def deploy(model_uri, env):
 
 
         print(f"Endpoint is ready! Model {model_name} with version {model_version} is now in production")
-        # Clean up old aliases if they exist
-        client.delete_registered_model_alias(name=f"{model_name}", alias=target_alias)
-        # Set the new model version as the production alias
         client.set_registered_model_alias(name=f"{model_name}", alias="production", version=int(model_version))
-        
 
 
 if __name__ == "__main__":
