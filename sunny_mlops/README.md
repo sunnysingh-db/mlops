@@ -8,7 +8,7 @@ The "Getting Started" docs can be found at https://learn.microsoft.com/azure/dat
 
 ## Table of contents
 * [Code structure](#code-structure): structure of this project.
-a
+aaa
 * [Configure your ML pipeline](#configure-your-ml-pipeline): making and testing ML code changes on Databricks or your local machine.
 
 * [Iterating on ML code](#iterating-on-ml-code): making and testing ML code changes on Databricks or your local machine.
