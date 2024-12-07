@@ -267,20 +267,23 @@ model = lgb.train(param, train_lgb_dataset, num_rounds)
 # COMMAND ----------
 
 # DBTITLE 1, Log model and return output.
-# Log the trained model with MLflow and package it with feature lookup information.
+# Log the trained model with MLflow, including feature lookup information for deployment
 fe.log_model(
-    model=model, #specify model
-    artifact_path="model_packaged",
-    flavor=mlflow.lightgbm,
-    training_set=training_set,
-    registered_model_name=model_name,
+    model=model,  # The trained model to be logged
+    artifact_path="model_packaged",  # Path within the MLflow artifact repository to save the model
+    flavor=mlflow.lightgbm,  # Specifies the MLflow model flavor to be used
+    training_set=training_set,  # The dataset used for training, for lineage tracking
+    registered_model_name=model_name,  # Name under which the model will be registered in MLflow
 )
 
+# Retrieve the latest version of the model for deployment
+model_version = get_latest_model_version(model_name)  # Function to get the latest model version
+model_uri = f"models:/{model_name}/{model_version}"  # Construct the model URI for deployment
 
-# The returned model URI is needed by the model deployment notebook.
-model_version = get_latest_model_version(model_name)
-model_uri = f"models:/{model_name}/{model_version}"
-dbutils.jobs.taskValues.set("model_uri", model_uri)
-dbutils.jobs.taskValues.set("model_name", model_name)
-dbutils.jobs.taskValues.set("model_version", model_version)
+# Set job task values for downstream use in the deployment notebook
+dbutils.jobs.taskValues.set("model_uri", model_uri)  # Pass the model URI to the next notebook/job task
+dbutils.jobs.taskValues.set("model_name", model_name)  # Pass the model name to the next notebook/job task
+dbutils.jobs.taskValues.set("model_version", model_version)  # Pass the model version to the next notebook/job task
+
+# Exit the notebook and return the model URI for use in deployment
 dbutils.notebook.exit(model_uri)
