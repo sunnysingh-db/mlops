@@ -1,0 +1,85 @@
+# ══════════════════════════════════════════════════════════════════════════════
+# MLOps Framework Configuration
+# ══════════════════════════════════════════════════════════════════════════════
+# This is the ONLY file you need to edit.
+# After editing, run the INSTALL notebook to generate everything.
+# ══════════════════════════════════════════════════════════════════════════════
+
+# ─── MODE ────────────────────────────────────────────────────────────────────
+# "train"   = build a new model from scratch (EDA → features → HPO → register)
+# "migrate" = bring an existing pickle into Databricks MLOps
+mode: "train"
+
+# ─── COMMON ──────────────────────────────────────────────────────────────────
+catalog: "sunny_uc"
+schema: "demo"
+model_name: "churn_model"
+task_type: "classification"          # "classification" | "regression"
+entity_key: "customer_id"
+timestamp_key: "event_date"     # for point-in-time correctness
+label_column: "churned"
+feature_table_name: "sunny_uc.demo.churn_features"
+
+# ─── TRAIN MODE ──────────────────────────────────────────────────────────────
+train:
+  training_table: "sunny_uc.demo.churn_labels"
+  model_algorithm: "lightgbm"        # "lightgbm" | "xgboost" | "random_forest" | "deep_learning" | "all"
+  n_trials: 5
+  parallel_trials: "auto"            # "auto" | 1 | 2 | 4 | 8
+  split_ratios:
+    train: 0.70
+    val: 0.15
+    test: 0.15
+  positive_label: 1                  # classification only
+
+  # Deep learning (only when model_algorithm includes "deep_learning")
+  deep_learning:
+    framework: "pytorch"             # "pytorch" | "tensorflow"
+    architecture: "tabular_mlp"      # "tabular_mlp" | "tabular_resnet" | "custom"
+    hidden_layers: [256, 128, 64]
+    dropout: 0.3
+    activation: "relu"               # "relu" | "gelu" | "silu"
+    epochs: 100
+    batch_size: 256
+    early_stopping_patience: 10
+    learning_rate_range: [0.0001, 0.01]
+    weight_decay_range: [0.00001, 0.01]
+    compute: "gpu"                   # "cpu" | "gpu"
+
+# ─── MIGRATE MODE ────────────────────────────────────────────────────────────
+migrate:
+  model_path: "/Volumes/sunny_uc/demo/models/churn_lgbm.pkl"
+  model_type: "sklearn"              # "sklearn" | "xgboost" | "lightgbm" | "pytorch"
+  reference_table: "sunny_uc.demo.migration_reference"
+  additional_artifacts: []
+    # - "/Volumes/sunny_uc/demo/models/scaler.pkl"
+
+# ─── INFERENCE ───────────────────────────────────────────────────────────────
+inference_mode: "batch"               # "serving" | "batch" | "both"
+
+batch:
+  output_table: "sunny_uc.demo.churn_predictions"
+  scoring_table: "sunny_uc.demo.customers_to_score"
+  schedule: null         # Daily 6am UTC (Quartz cron), or null for manual
+
+serving:
+  endpoint_name: null                # Auto-derived as "{model_name}_serving" if null
+  scale_to_zero: true
+  workload_size: "Small"             # "Small" | "Medium" | "Large"
+  workload_type: "CPU"               # "CPU" | "GPU"
+
+# ─── EXPLAINABILITY ──────────────────────────────────────────────────────────
+explainability:
+  enabled: false
+  methods: ["shap", "permutation_importance", "partial_dependence"]
+  n_samples: 1000
+  log_to_mlflow: true
+
+# ─── MONITORING ──────────────────────────────────────────────────────────────
+monitoring:
+  enabled: true
+  granularity: "1 day"               # "1 hour" | "1 day" | "1 week"
+  refresh_schedule: null  # Daily 8am UTC, or null for manual
+
+# ─── DEPLOYMENT TARGET ───────────────────────────────────────────────────────
+target: "dev"                        # "dev" | "staging" | "prod"

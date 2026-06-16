@@ -1,0 +1,41 @@
+# Databricks Asset Bundle — MLOps Framework
+# STATIC file. Edit variables below to match your project.
+# Deploy: databricks bundle deploy -t dev
+
+bundle:
+  name: mlops-framework
+
+include:
+  - resources/*.yml
+
+# ─── EDIT THESE TO MATCH YOUR PROJECT ───────────────────────────────
+variables:
+  catalog:
+    description: Unity Catalog name
+    default: "my_catalog"
+  schema:
+    description: Schema within the catalog
+    default: "my_schema"
+  model_name:
+    description: Model identifier (used in job names + UC registration)
+    default: "churn_model"
+
+# ─── DEPLOYMENT TARGETS ─────────────────────────────────────────────
+targets:
+  dev:
+    default: true
+    mode: development
+    variables:
+      catalog: "my_catalog"
+      schema: "my_schema"
+
+  staging:
+    variables:
+      catalog: "staging_catalog"
+      schema: "staging_schema"
+
+  prod:
+    mode: production
+    variables:
+      catalog: "prod_catalog"
+      schema: "prod_schema"

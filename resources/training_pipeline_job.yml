@@ -1,0 +1,65 @@
+# Training Pipeline Job — runs all training notebooks in sequence.
+# Notebooks self-skip if their config section is disabled.
+
+resources:
+  jobs:
+    training_pipeline:
+      name: "[${bundle.target}] MLOps Training - ${var.model_name}"
+
+      tasks:
+        - task_key: "eda"
+          notebook_task:
+            notebook_path: ../src/notebooks/01_eda.py
+
+        - task_key: "feature_engineering"
+          depends_on:
+            - task_key: "eda"
+          notebook_task:
+            notebook_path: ../src/notebooks/02_feature_engineering.py
+
+        - task_key: "train_tune"
+          depends_on:
+            - task_key: "feature_engineering"
+          notebook_task:
+            notebook_path: ../src/notebooks/03_train_tune.py
+
+        - task_key: "deep_learning"
+          depends_on:
+            - task_key: "feature_engineering"
+          notebook_task:
+            notebook_path: ../src/notebooks/03b_train_deep_learning.py
+
+        - task_key: "evaluate"
+          depends_on:
+            - task_key: "train_tune"
+            - task_key: "deep_learning"
+          notebook_task:
+            notebook_path: ../src/notebooks/04_evaluate.py
+
+        - task_key: "explainability"
+          depends_on:
+            - task_key: "evaluate"
+          notebook_task:
+            notebook_path: ../src/notebooks/04b_explainability.py
+
+        - task_key: "register"
+          depends_on:
+            - task_key: "evaluate"
+          notebook_task:
+            notebook_path: ../src/notebooks/05_register.py
+
+        - task_key: "serve"
+          depends_on:
+            - task_key: "register"
+          notebook_task:
+            notebook_path: ../src/notebooks/07_serve.py
+
+        - task_key: "monitor"
+          depends_on:
+            - task_key: "register"
+          notebook_task:
+            notebook_path: ../src/notebooks/08_monitor.py
+
+      permissions:
+        - level: CAN_VIEW
+          group_name: users

@@ -1,0 +1,168 @@
+<style>
+  .g { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 640px; margin: 0 auto; padding: 20px 0; }
+  .g h1 { font-size: 24px; font-weight: 700; margin: 0 0 4px 0; }
+  .g .sub { color: #6b7280; font-size: 14px; margin-bottom: 36px; }
+  .g .divider { height: 1px; background: #e5e7eb; margin: 28px 0; }
+  .g .section-label { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 1px; color: #9ca3af; margin-bottom: 16px; }
+  .g .step { display: flex; gap: 16px; margin-bottom: 20px; align-items: flex-start; }
+  .g .step-dot { width: 36px; height: 36px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-weight: 700; font-size: 14px; flex-shrink: 0; color: white; }
+  .g .dot-blue { background: #3b82f6; }
+  .g .dot-amber { background: #f59e0b; }
+  .g .dot-green { background: #10b981; }
+  .g .dot-purple { background: #8b5cf6; }
+  .g .dot-slate { background: #475569; }
+  .g .step-content { flex: 1; }
+  .g .step-title { font-size: 15px; font-weight: 600; margin: 0 0 4px 0; color: #1f2937; }
+  .g .step-desc { font-size: 13px; color: #6b7280; margin: 0 0 8px 0; line-height: 1.5; }
+  .g .step-link { display: inline-flex; align-items: center; gap: 4px; padding: 5px 10px; background: #f0f7ff; border: 1px solid #bfdbfe; border-radius: 6px; color: #1d4ed8; font-size: 12px; font-weight: 500; text-decoration: none; font-family: 'SF Mono', Monaco, Consolas, monospace; margin-right: 6px; margin-bottom: 6px; transition: all 0.15s; }
+  .g .step-link:hover { background: #dbeafe; border-color: #93c5fd; }
+  .g .step-link-edit { background: #fffbeb; border-color: #fcd34d; color: #92400e; }
+  .g .step-link-edit:hover { background: #fef3c7; border-color: #f59e0b; }
+  .g .connector { width: 36px; display: flex; justify-content: center; }
+  .g .connector-line { width: 2px; height: 12px; background: #e5e7eb; }
+  .g .tag { display: inline-block; font-size: 10px; font-weight: 600; padding: 2px 6px; border-radius: 3px; margin-left: 6px; vertical-align: middle; }
+  .g .tag-edit { background: #fef3c7; color: #92400e; }
+  .g .tag-optional { background: #ede9fe; color: #5b21b6; }
+  .g .run-cell { display: inline-flex; align-items: center; gap: 6px; padding: 8px 14px; background: #f0fdf4; border: 1px solid #86efac; border-radius: 6px; color: #166534; font-size: 12px; font-weight: 600; margin-top: 4px; }
+</style>
+
+<div class="g">
+  <h1>MLOps Framework</h1>
+  <p class="sub">Follow the steps below. Click any file to open it directly.</p>
+
+  <!-- ═══ SETUP ═══ -->
+  <div class="section-label">Setup</div>
+
+  <div class="step">
+    <div class="step-dot dot-blue">1</div>
+    <div class="step-content">
+      <p class="step-title">Configure your project</p>
+      <p class="step-desc">Set your catalog, schema, model name, algorithm, and inference preferences.</p>
+      <a class="step-link step-link-edit" href="{{CONFIG_URL}}" target="_blank">config.yaml</a>
+      <a class="step-link step-link-edit" href="{{BUNDLE_URL}}" target="_blank">databricks.yml</a>
+    </div>
+  </div>
+
+  <div class="connector"><div class="connector-line"></div></div>
+
+  <div class="step">
+    <div class="step-dot dot-blue">2</div>
+    <div class="step-content">
+      <p class="step-title">Define your features<span class="tag tag-edit">you edit this</span></p>
+      <p class="step-desc">Write your feature transformations. Templates and examples are inside.</p>
+      <a class="step-link step-link-edit" href="{{NB_BASE}}/02_feature_engineering" target="_blank">02_feature_engineering.py</a>
+    </div>
+  </div>
+
+  <!-- ═══ TRAIN ═══ -->
+  <div class="divider"></div>
+  <div class="section-label">Train (run in order)</div>
+
+  <div class="step">
+    <div class="step-dot dot-green">3</div>
+    <div class="step-content">
+      <p class="step-title">Explore your data</p>
+      <p class="step-desc">Shape, nulls, correlations, class balance, leakage check.</p>
+      <a class="step-link" href="{{NB_BASE}}/01_eda" target="_blank">01_eda.py</a>
+    </div>
+  </div>
+
+  <div class="connector"><div class="connector-line"></div></div>
+
+  <div class="step">
+    <div class="step-dot dot-green">4</div>
+    <div class="step-content">
+      <p class="step-title">Run feature engineering</p>
+      <p class="step-desc">Executes your feature logic and writes to the Feature Store.</p>
+      <a class="step-link" href="{{NB_BASE}}/02_feature_engineering" target="_blank">02_feature_engineering.py</a>
+    </div>
+  </div>
+
+  <div class="connector"><div class="connector-line"></div></div>
+
+  <div class="step">
+    <div class="step-dot dot-green">5</div>
+    <div class="step-content">
+      <p class="step-title">Train &amp; tune</p>
+      <p class="step-desc">Optuna HPO across LightGBM, XGBoost, or Random Forest. All trials logged to MLflow.</p>
+      <a class="step-link" href="{{NB_BASE}}/03_train_tune" target="_blank">03_train_tune.py</a>
+      <a class="step-link" href="{{NB_BASE}}/03b_train_deep_learning" target="_blank">03b_deep_learning.py<span class="tag tag-optional">optional</span></a>
+    </div>
+  </div>
+
+  <div class="connector"><div class="connector-line"></div></div>
+
+  <div class="step">
+    <div class="step-dot dot-green">6</div>
+    <div class="step-content">
+      <p class="step-title">Evaluate</p>
+      <p class="step-desc">Held-out test metrics, diagnostic plots, overfitting audit.</p>
+      <a class="step-link" href="{{NB_BASE}}/04_evaluate" target="_blank">04_evaluate.py</a>
+      <a class="step-link" href="{{NB_BASE}}/04b_explainability" target="_blank">04b_explainability.py<span class="tag tag-optional">optional</span></a>
+    </div>
+  </div>
+
+  <div class="connector"><div class="connector-line"></div></div>
+
+  <div class="step">
+    <div class="step-dot dot-green">7</div>
+    <div class="step-content">
+      <p class="step-title">Register as Champion</p>
+      <p class="step-desc">Promotes model to Unity Catalog. Previous version becomes Challenger.</p>
+      <a class="step-link" href="{{NB_BASE}}/05_register" target="_blank">05_register.py</a>
+    </div>
+  </div>
+
+  <!-- ═══ DEPLOY ═══ -->
+  <div class="divider"></div>
+  <div class="section-label">Deploy &amp; Monitor</div>
+
+  <div class="step">
+    <div class="step-dot dot-purple">8</div>
+    <div class="step-content">
+      <p class="step-title">Serve your model</p>
+      <p class="step-desc">Batch scoring on a schedule, real-time API endpoint, or both.</p>
+      <a class="step-link" href="{{NB_BASE}}/06_batch_inference" target="_blank">06_batch_inference.py</a>
+      <a class="step-link" href="{{NB_BASE}}/07_serve" target="_blank">07_serve.py</a>
+    </div>
+  </div>
+
+  <div class="connector"><div class="connector-line"></div></div>
+
+  <div class="step">
+    <div class="step-dot dot-purple">9</div>
+    <div class="step-content">
+      <p class="step-title">Monitor for drift</p>
+      <p class="step-desc">Lakehouse Monitoring for data drift + prediction shift detection.</p>
+      <a class="step-link" href="{{NB_BASE}}/08_monitor" target="_blank">08_monitor.py</a>
+      <a class="step-link" href="{{NB_BASE}}/09_process_inference" target="_blank">09_process_inference.py</a>
+    </div>
+  </div>
+
+  <!-- ═══ MIGRATE ═══ -->
+  <div class="divider"></div>
+  <div class="section-label">Migrate Mode (alternative path — skip steps 3-7 if you already have a model)</div>
+
+  <div class="step">
+    <div class="step-dot dot-amber">A</div>
+    <div class="step-content">
+      <p class="step-title">Validate &amp; wrap existing model</p>
+      <p class="step-desc">Load your pickle, validate predictions, wrap for Databricks, register. Then continue to step 8 above.</p>
+      <a class="step-link" href="{{NB_BASE}}/01_validate_model" target="_blank">01_validate_model.py</a>
+      <a class="step-link" href="{{NB_BASE}}/03_wrap_and_register" target="_blank">03_wrap_and_register.py</a>
+    </div>
+  </div>
+
+  <!-- ═══ BUNDLE DEPLOY ═══ -->
+  <div class="divider"></div>
+  <div class="section-label">Automate with Databricks Jobs</div>
+
+  <div class="step">
+    <div class="step-dot dot-slate">10</div>
+    <div class="step-content">
+      <p class="step-title">Deploy as scheduled jobs</p>
+      <p class="step-desc">Once everything works manually, deploy as automated Databricks Jobs. This creates a training pipeline job and a batch inference job that runs on a schedule.</p>
+      <div class="run-cell">&#x25B6; Run the cell below to validate &amp; deploy</div>
+    </div>
+  </div>
+</div>

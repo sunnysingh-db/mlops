@@ -1,0 +1,32 @@
+# Batch Inference Job — scores new data + refreshes monitoring.
+# Schedule configured below (daily 6am UTC by default).
+
+resources:
+  jobs:
+    batch_inference:
+      name: "[${bundle.target}] Batch Inference - ${var.model_name}"
+
+      schedule:
+        quartz_cron_expression: "0 0 6 * * ? *"
+        timezone_id: UTC
+
+      tasks:
+        - task_key: "score"
+          notebook_task:
+            notebook_path: ../src/notebooks/06_batch_inference.py
+
+        - task_key: "process_inference"
+          depends_on:
+            - task_key: "score"
+          notebook_task:
+            notebook_path: ../src/notebooks/09_process_inference.py
+
+        - task_key: "refresh_monitor"
+          depends_on:
+            - task_key: "score"
+          notebook_task:
+            notebook_path: ../src/notebooks/08_monitor.py
+
+      permissions:
+        - level: CAN_VIEW
+          group_name: users
