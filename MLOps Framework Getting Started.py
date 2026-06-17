@@ -6,16 +6,23 @@
 # DBTITLE 1,Framework Visual Guide
 from pathlib import Path
 
-nb_path = dbutils.notebook.entry_point.getDbutils().notebook().getContext().notebookPath().get()
-fw_dir = "/Workspace" + str(Path(nb_path).parent)
-fw_workspace_path = str(Path(nb_path).parent)
+# Dynamically resolve all paths from THIS notebook's location — fully portable
+ctx = dbutils.notebook.entry_point.getDbutils().notebook().getContext()
+nb_path = ctx.notebookPath().get()
 
-# Build workspace URLs for notebook links
-nb_base = f"/#workspace{fw_workspace_path}/src/notebooks"
-config_url = f"/#workspace{fw_workspace_path}/config.yaml"
-bundle_url = f"/#workspace{fw_workspace_path}/databricks.yml"
+# Use workspace-specific hostname (NOT regional URL which triggers workspace selector)
+workspace_host = spark.conf.get("spark.databricks.workspaceUrl")  # e.g. adb-12345.17.azuredatabricks.net
 
-# Load HTML and inject links
+fw_workspace_path = str(Path(nb_path).parent)  # framework root (workspace path)
+fw_dir = f"/Workspace{fw_workspace_path}"       # filesystem path for file I/O
+
+# Build full absolute URLs using /#workspace/ routing with workspace-specific host
+base_url = f"https://{workspace_host}/#workspace"
+nb_base = f"{base_url}{fw_workspace_path}/src/notebooks"
+config_url = f"{base_url}{fw_workspace_path}/config.yaml"
+bundle_url = f"{base_url}{fw_workspace_path}/databricks.yml"
+
+# Load HTML template and inject resolved links
 with open(f"{fw_dir}/src/notebooks/guide.html") as f:
     html = f.read()
 

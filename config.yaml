@@ -1,85 +1,176 @@
 # ══════════════════════════════════════════════════════════════════════════════
 # MLOps Framework Configuration
 # ══════════════════════════════════════════════════════════════════════════════
-# This is the ONLY file you need to edit.
-# After editing, run the INSTALL notebook to generate everything.
+# This is the ONLY file you need to edit (besides 02_feature_engineering).
+# After editing, run notebooks 01-08 in sequence or deploy via DABs.
 # ══════════════════════════════════════════════════════════════════════════════
 
 # ─── MODE ────────────────────────────────────────────────────────────────────
-# "train"   = build a new model from scratch (EDA → features → HPO → register)
-# "migrate" = bring an existing pickle into Databricks MLOps
+# "train"   → Build a new model from scratch (EDA → features → HPO → register)
+# "migrate" → Bring an existing pickle/model file into Databricks MLOps
 mode: "train"
 
 # ─── COMMON ──────────────────────────────────────────────────────────────────
-catalog: "sunny_uc"
-schema: "demo"
-model_name: "churn_model"
-task_type: "classification"          # "classification" | "regression"
-entity_key: "customer_id"
-timestamp_key: "event_date"     # for point-in-time correctness
-label_column: "churned"
-feature_table_name: "sunny_uc.demo.churn_features"
+# These settings are shared across all notebooks in the pipeline.
+
+catalog: "users"                         # Unity Catalog catalog name
+schema: "sunny_singh"                    # Unity Catalog schema name
+model_name: "churn_model"                # Model name in UC registry (becomes {catalog}.{schema}.{model_name})
+
+task_type: "classification"              # "classification" → binary/multiclass labels
+                                         # "regression"     → continuous numeric target
+
+entity_key: "customer_id"                # Primary key column that uniquely identifies each entity
+timestamp_key: "event_date"              # Timestamp column for point-in-time correct feature joins
+label_column: "churned"                  # Target/label column name in the training table
+
+feature_table_name: "users.sunny_singh.churn_features"
+                                         # Fully qualified name of the Feature Store table
+                                         # Created by 02_feature_engineering, used by batch inference
 
 # ─── TRAIN MODE ──────────────────────────────────────────────────────────────
-train:
-  training_table: "sunny_uc.demo.churn_labels"
-  model_algorithm: "lightgbm"        # "lightgbm" | "xgboost" | "random_forest" | "deep_learning" | "all"
-  n_trials: 5
-  parallel_trials: "auto"            # "auto" | 1 | 2 | 4 | 8
-  split_ratios:
-    train: 0.70
-    val: 0.15
-    test: 0.15
-  positive_label: 1                  # classification only
+# Configuration for training a new model from scratch (mode: "train").
 
-  # Deep learning (only when model_algorithm includes "deep_learning")
+train:
+  training_table: "users.sunny_singh.customer_activity"
+                                         # Table containing entity_key + timestamp_key + label_column
+                                         # Features are auto-joined from feature_table_name during training
+
+  model_algorithm: "lightgbm"            # Which algorithm(s) to train:
+                                         #   "lightgbm"       → LightGBM gradient boosting (fast, good default)
+                                         #   "xgboost"        → XGBoost gradient boosting
+                                         #   "catboost"       → CatBoost (handles categoricals natively)
+                                         #   "random_forest"  → Scikit-learn random forest
+                                         #   "elasticnet"     → Linear model (L1+L2, interpretable)
+                                         #   "deep_learning"  → Neural network (see deep_learning section below)
+                                         #   "all"            → Train all algorithms and pick the best
+
+  n_trials: 5                            # Number of Optuna hyperparameter tuning trials (more = better model, slower)
+                                         #   Recommended: 5 for quick tests, 20-50 for production
+
+  parallel_trials: "auto"                # Parallel HPO trials: "auto" (uses available cores), or 1/2/4/8
+
+  split_ratios:                          # How to split data for training/validation/testing
+    train: 0.70                          #   70% for training
+    val: 0.15                            #   15% for validation (used during HPO)
+    test: 0.15                           #   15% for held-out test (used in 04_evaluate)
+
+  positive_label: 1                      # Classification only: which label value = positive class
+                                         # Used for precision/recall/F1 calculation
+
+  # Deep learning (only used when model_algorithm is "deep_learning" or "all")
   deep_learning:
-    framework: "pytorch"             # "pytorch" | "tensorflow"
-    architecture: "tabular_mlp"      # "tabular_mlp" | "tabular_resnet" | "custom"
-    hidden_layers: [256, 128, 64]
-    dropout: 0.3
-    activation: "relu"               # "relu" | "gelu" | "silu"
-    epochs: 100
-    batch_size: 256
-    early_stopping_patience: 10
-    learning_rate_range: [0.0001, 0.01]
-    weight_decay_range: [0.00001, 0.01]
-    compute: "gpu"                   # "cpu" | "gpu"
+    framework: "pytorch"                 # "pytorch" | "tensorflow"
+    architecture: "tabular_mlp"          # "tabular_mlp"    → Standard MLP for tabular data
+                                         # "tabular_resnet" → ResNet-style with skip connections
+                                         # "custom"         → User-defined in nn_architectures.py
+    hidden_layers: [256, 128, 64]        # Layer sizes (number of neurons per hidden layer)
+    dropout: 0.3                         # Dropout rate for regularization (0.0 to 0.5)
+    activation: "relu"                   # "relu" | "gelu" | "silu"
+    epochs: 100                          # Max training epochs (early stopping may stop sooner)
+    batch_size: 256                      # Mini-batch size
+    early_stopping_patience: 10          # Stop after N epochs with no validation improvement
+    learning_rate_range: [0.0001, 0.01]  # HPO search range for learning rate
+    weight_decay_range: [0.00001, 0.01]  # HPO search range for weight decay (L2 regularization)
+    compute: "gpu"                       # "cpu" | "gpu" (GPU recommended for large datasets)
 
 # ─── MIGRATE MODE ────────────────────────────────────────────────────────────
+# Configuration for migrating an existing trained model into Databricks (mode: "migrate").
+# Use this when you have a pickle/model file trained outside Databricks.
+
 migrate:
-  model_path: "/Volumes/sunny_uc/demo/models/churn_lgbm.pkl"
-  model_type: "sklearn"              # "sklearn" | "xgboost" | "lightgbm" | "pytorch"
-  reference_table: "sunny_uc.demo.migration_reference"
-  additional_artifacts: []
-    # - "/Volumes/sunny_uc/demo/models/scaler.pkl"
+  model_path: "/Volumes/users/sunny_singh/models/churn_lgbm.pkl"
+                                         # Path to your model file in a UC Volume
+                                         # Supported formats: .pkl, .joblib, .pt, .h5
+
+  model_type: "sklearn"                  # Type of the saved model:
+                                         #   "sklearn"   → scikit-learn Pipeline or estimator
+                                         #   "xgboost"   → XGBoost Booster or sklearn wrapper
+                                         #   "lightgbm"  → LightGBM Booster or sklearn wrapper
+                                         #   "pytorch"   → PyTorch nn.Module (state_dict)
+
+  reference_table: "users.sunny_singh.migration_reference"
+                                         # Table with known-good predictions for validation
+                                         # Must have entity_key + features + "prediction" column
+                                         # Used to verify >= 99% match with your model's output
+
+  additional_artifacts: []               # Extra files to package with the model (optional)
+    # - "/Volumes/users/sunny_singh/models/scaler.pkl"
+    # - "/Volumes/users/sunny_singh/models/label_encoder.pkl"
 
 # ─── INFERENCE ───────────────────────────────────────────────────────────────
-inference_mode: "batch"               # "serving" | "batch" | "both"
+# How the model serves predictions after training/registration.
+
+inference_mode: "both"                   # "batch"   → Scheduled batch scoring only (06_batch_inference)
+                                         # "serving" → Real-time endpoint only (07_serve)
+                                         # "both"    → Enable both batch and serving
 
 batch:
-  output_table: "sunny_uc.demo.churn_predictions"
-  scoring_table: "sunny_uc.demo.customers_to_score"
-  schedule: null         # Daily 6am UTC (Quartz cron), or null for manual
+  output_table: "users.sunny_singh.churn_predictions"
+                                         # Where batch predictions are written (append mode)
+                                         # Includes: entity_key, prediction, scored_at, model_version
+
+  scoring_table: "users.sunny_singh.customers_to_score"
+                                         # Table of entities to score (must have entity_key column)
+                                         # Features are auto-fetched from feature_table_name
+
+  schedule: null                         # Quartz cron for automated batch scoring, or null for manual
+                                         # Examples:
+                                         #   "0 0 6 * * ?"  → Daily at 6:00 AM UTC
+                                         #   "0 0 */6 * * ?" → Every 6 hours
+                                         #   null            → Manual trigger only
 
 serving:
-  endpoint_name: null                # Auto-derived as "{model_name}_serving" if null
-  scale_to_zero: true
-  workload_size: "Small"             # "Small" | "Medium" | "Large"
-  workload_type: "CPU"               # "CPU" | "GPU"
+  endpoint_name: null                    # Custom endpoint name, or null → auto-derived as "{model_name}_serving"
+
+  scale_to_zero: true                    # true  → Endpoint scales to 0 when idle (saves cost, cold start ~60s)
+                                         # false → Always keeps at least 1 instance warm (no cold start)
+
+  workload_size: "Small"                 # Compute size per instance:
+                                         #   "Small"  → 4 CPU cores, good for <100 QPS
+                                         #   "Medium" → 8 CPU cores, good for 100-500 QPS
+                                         #   "Large"  → 16 CPU cores, good for 500+ QPS
+
+  workload_type: "CPU"                   # "CPU" → Standard CPU instances (good for sklearn/lightgbm)
+                                         # "GPU" → GPU instances (needed for deep learning models)
 
 # ─── EXPLAINABILITY ──────────────────────────────────────────────────────────
+# Model interpretability analysis (run via 04b_explainability notebook).
+
 explainability:
-  enabled: false
+  enabled: false                         # true → Run explainability analysis after evaluation
+                                         # false → Skip (saves time during development)
+
   methods: ["shap", "permutation_importance", "partial_dependence"]
-  n_samples: 1000
-  log_to_mlflow: true
+                                         # Which methods to run:
+                                         #   "shap"                     → SHAP feature importance + waterfall plots
+                                         #   "permutation_importance"   → Permutation-based feature importance
+                                         #   "partial_dependence"       → Partial dependence plots (PDP)
+
+  n_samples: 1000                        # Number of samples for SHAP/permutation (more = slower but more accurate)
+  log_to_mlflow: true                    # true → Log plots and tables as MLflow artifacts
 
 # ─── MONITORING ──────────────────────────────────────────────────────────────
+# Lakehouse Monitor configuration (run via 08_monitor notebook).
+# Tracks data drift, prediction distribution, and model quality over time.
+
 monitoring:
-  enabled: true
-  granularity: "1 day"               # "1 hour" | "1 day" | "1 week"
-  refresh_schedule: null  # Daily 8am UTC, or null for manual
+  enabled: true                          # true → Create/update Lakehouse Monitor on predictions table
+                                         # false → Skip monitoring setup
+
+  granularity: "1 day"                   # Time window for aggregating metrics:
+                                         #   "1 hour" → Hourly drift detection (high-frequency scoring)
+                                         #   "1 day"  → Daily aggregation (most common)
+                                         #   "1 week" → Weekly aggregation (low-volume use cases)
+
+  refresh_schedule: null                 # Quartz cron for automated metric refresh, or null for manual
+                                         # Examples:
+                                         #   "0 0 8 * * ?"  → Daily at 8:00 AM UTC
+                                         #   null            → Manual trigger only (use 08_monitor notebook)
 
 # ─── DEPLOYMENT TARGET ───────────────────────────────────────────────────────
-target: "dev"                        # "dev" | "staging" | "prod"
+# Used by DABs (Declarative Automation Bundles) for multi-environment deployment.
+
+target: "dev"                            # "dev"     → Development (relaxed validation, small compute)
+                                         # "staging" → Pre-production (full validation, mirrors prod)
+                                         # "prod"    → Production (strict validation, alerting enabled)

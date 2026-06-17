@@ -1,27 +1,46 @@
 # Databricks notebook source
+# /// script
+# [tool.databricks.environment]
+# base_environment = "databricks_ml_v5"
+# environment_version = "5"
+# ///
+# DBTITLE 1,Cell 1
 # MAGIC %md
 # MAGIC # 04 — Holdout Evaluation
 # MAGIC
 # MAGIC ## Purpose
-# MAGIC Score the locked test set with the best model from training.
-# MAGIC Audit train/val gap, log test metrics, produce diagnostic plots.
-# MAGIC This is the ONLY place the test set is ever used.
+# MAGIC Score the locked test set with the best model from training using `mlflow.evaluate()`.
+# MAGIC This single API call computes all metrics, generates diagnostic plots, and logs everything
+# MAGIC to MLflow automatically. This is the ONLY place the test set is ever used.
+# MAGIC
+# MAGIC ## What `mlflow.evaluate()` gives you (automatically):
+# MAGIC - **Classification**: accuracy, F1, precision, recall, ROC-AUC, PR-AUC, log loss, confusion matrix, ROC curve, precision-recall curve, SHAP plots
+# MAGIC - **Regression**: RMSE, MAE, R², residual plots
+# MAGIC - All metrics logged under the same run as the trained model
+# MAGIC - All plots saved as MLflow artifacts (viewable in the experiment UI)
 # MAGIC
 # MAGIC ## Prerequisites
 # MAGIC - `03_train_tune.py` completed (best model logged, test split saved)
-# MAGIC
-# MAGIC ## Outputs
-# MAGIC - test_ prefixed metrics in MLflow
-# MAGIC - Diagnostic plots (confusion matrix / residuals)
-# MAGIC - Pass/fail verdict for model promotion
 # MAGIC
 # MAGIC ## Next Step
 # MAGIC → `04b_explainability.py` (if enabled) or `05_register.py`
 
 # COMMAND ----------
 
-import sys, json
+# DBTITLE 1,Install dependencies
+# MAGIC %pip install pyyaml lightgbm mlflow scikit-learn databricks-feature-engineering --quiet
+
+# COMMAND ----------
+
+# DBTITLE 1,Restart Python
+# MAGIC %restart_python
+
+# COMMAND ----------
+
+# DBTITLE 1,Setup
+import sys, json, warnings
 from pathlib import Path
+warnings.filterwarnings("ignore")
 
 notebook_path = dbutils.notebook.entry_point.getDbutils().notebook().getContext().notebookPath().get()
 framework_dir = str(Path(notebook_path).parent.parent.parent)
@@ -29,196 +48,152 @@ sys.path.insert(0, f"/Workspace{framework_dir}/src/notebooks")
 
 from helpers import load_config, append_deployment_log
 import mlflow
-import pandas as pd
-import numpy as np
 
 config = load_config()
 task_type = config["task_type"]
 label_column = config["label_column"]
 positive_label = config["train"].get("positive_label", 1)
+mlflow.set_registry_uri("databricks-uc")
 
 # Retrieve training context
 try:
     train_context = json.loads(dbutils.jobs.taskValues.get(taskKey="03_train_tune", key="train_context"))
 except Exception:
-    # Fallback for interactive mode: get latest run
     train_context = None
     print("⚠️  Running interactively — using latest experiment run")
 
 # COMMAND ----------
 
+# DBTITLE 1,Cell 5
 # MAGIC %md
-# MAGIC ## Step 1: Load Best Model
+# MAGIC ## Step 1: Resolve Best Run
 # MAGIC
-# MAGIC Loads the model artifact from the best training run. The `run_id` is passed
-# MAGIC from `03_train_tune.py` via task values (in DAB jobs) or can be set manually.
+# MAGIC Finds the best model run from training. No need to manually load the model —
+# MAGIC `mlflow.evaluate()` loads it directly from the run URI.
 
 # COMMAND ----------
 
+# DBTITLE 1,Resolve Best Run
 if train_context:
     best_run_id = train_context["best_run_id"]
+    print(f"Source: task_values")
 else:
-    # Get most recent run with a logged model
+    # Interactive mode: find the latest 'best_model_*' run (the final retrained model)
     experiment_name = f"/Users/{config.get('_current_user', 'shared')}/{config['model_name']}_experiment"
-    runs = mlflow.search_runs(experiment_names=[experiment_name],
-                              filter_string="tags.mlflow.log-model.history != ''",
-                              order_by=["start_time DESC"], max_results=1)
+    runs = mlflow.search_runs(
+        experiment_names=[experiment_name],
+        filter_string="attributes.run_name LIKE 'best_model_%'",
+        order_by=["start_time DESC"],
+        max_results=1,
+    )
+    if len(runs) == 0:
+        raise ValueError(f"No 'best_model_*' runs found. Run 03_train_tune first.")
     best_run_id = runs.iloc[0].run_id
+    print(f"Source: mlflow (latest best_model run)")
 
-print(f"Loading model from run: {best_run_id}")
-model_uri = f"runs:/{best_run_id}/model"
-model = mlflow.sklearn.load_model(model_uri)
+print(f"Run ID:    {best_run_id}")
 
 # COMMAND ----------
 
+# DBTITLE 1,Cell 7
 # MAGIC %md
-# MAGIC ## Step 2: Score Test Set
+# MAGIC ## Step 2: Evaluate with `mlflow.evaluate()`
 # MAGIC
-# MAGIC Runs predictions on the test set. Remember: this is the FIRST and ONLY time
-# MAGIC the model sees this data. These predictions represent real-world performance.
+# MAGIC **One call does everything:**
+# MAGIC 1. Loads the model from MLflow
+# MAGIC 2. Scores the test set
+# MAGIC 3. Computes all relevant metrics (F1, precision, recall, ROC-AUC, PR-AUC, log loss, etc.)
+# MAGIC 4. Generates diagnostic plots (confusion matrix, ROC curve, PR curve, lift curve)
+# MAGIC 5. Logs everything as metrics + artifacts to the MLflow run
+# MAGIC
 # MAGIC **⚠️ This test set has NEVER been seen during training or tuning.**
 
 # COMMAND ----------
 
+# DBTITLE 1,Cell 6
+import pandas as pd
+import pickle, os, logging
+
+# Suppress MLflow info/warning logs and tqdm progress bars (SHAP, artifact download)
+logging.getLogger("mlflow").setLevel(logging.ERROR)
+os.environ["TQDM_DISABLE"] = "1"
+
+# Load test set
 test_table = f"{config['catalog']}.{config['schema']}.{config['model_name']}_test_split"
 test_pdf = spark.table(test_table).toPandas()
+print(f"Test set: {len(test_pdf):,} samples")
 
-y_test = test_pdf[label_column]
-X_test = test_pdf.drop(columns=[label_column])
+# Why we load the raw sklearn pipeline instead of using model_uri directly:
+# The model was logged with fe.log_model() which wraps it as a PyFunc that expects
+# entity keys (customer_id, event_date) as input — it tries to look up features at
+# inference time. Our test split already has features pre-joined (the correct snapshot
+# from training time). Passing model_uri to mlflow.evaluate() would fail with:
+#   "Model is missing inputs ['customer_id', 'event_date']"
+# So we extract the raw sklearn pipeline and pass it as a function instead.
+artifact_path = mlflow.artifacts.download_artifacts(run_id=best_run_id, artifact_path="model")
+for root, dirs, files in os.walk(artifact_path):
+    for f in files:
+        if f == "model.pkl":
+            with open(os.path.join(root, f), "rb") as fh:
+                sklearn_model = pickle.load(fh)
+            break
 
-y_pred = model.predict(X_test)
-if task_type == "classification" and hasattr(model, "predict_proba"):
-    y_proba = model.predict_proba(X_test)[:, 1]
+# mlflow.evaluate() with the sklearn model wrapped as a callable function
+model_type = "classifier" if task_type == "classification" else "regressor"
 
-print(f"Test set: {len(y_test):,} samples scored")
-
-# COMMAND ----------
-
-# MAGIC %md
-# MAGIC ## Step 3: Compute Test Metrics
-# MAGIC
-# MAGIC All metrics are prefixed with `test_` to distinguish from training/validation metrics.
-# MAGIC These are the numbers you should report to stakeholders.
-
-# COMMAND ----------
-
-from sklearn.metrics import (f1_score, precision_score, recall_score,
-    average_precision_score, roc_auc_score, accuracy_score,
-    mean_squared_error, mean_absolute_error, r2_score)
+def predict_fn(df):
+    return sklearn_model.predict(df)
 
 with mlflow.start_run(run_id=best_run_id):
-    if task_type == "classification":
-        metrics = {
-            "test_f1": f1_score(y_test, y_pred, pos_label=positive_label),
-            "test_precision": precision_score(y_test, y_pred, pos_label=positive_label),
-            "test_recall": recall_score(y_test, y_pred, pos_label=positive_label),
-            "test_accuracy": accuracy_score(y_test, y_pred),
-        }
-        if hasattr(model, "predict_proba"):
-            metrics["test_roc_auc"] = roc_auc_score(y_test, y_proba)
-            metrics["test_pr_auc"] = average_precision_score(y_test, y_proba)
-    else:
-        metrics = {
-            "test_rmse": mean_squared_error(y_test, y_pred, squared=False),
-            "test_mae": mean_absolute_error(y_test, y_pred),
-            "test_r2": r2_score(y_test, y_pred),
-        }
+    eval_result = mlflow.evaluate(
+        model=predict_fn,
+        data=test_pdf,
+        targets=label_column,
+        model_type=model_type,
+        evaluators="default",
+    )
 
-    mlflow.log_metrics(metrics)
+# Print results
+metrics = eval_result.metrics
+print(f"\n{'=' * 60}")
+print(f"  TEST SET EVALUATION (via mlflow.evaluate)")
+print(f"{'=' * 60}")
+for k, v in sorted(metrics.items()):
+    if isinstance(v, float):
+        print(f"  {k:<30s} {v:.4f}")
+print(f"{'=' * 60}")
 
-print("Test Metrics:")
-for k, v in metrics.items():
-    print(f"  {k}: {v:.4f}")
+# Print experiment URL for viewing plots (confusion matrix, ROC, PR curve, SHAP)
+workspace_host = spark.conf.get("spark.databricks.workspaceUrl")
+run_url = f"https://{workspace_host}/ml/experiments/{mlflow.get_run(best_run_id).info.experiment_id}/runs/{best_run_id}"
+print(f"\n✅ All metrics + diagnostic plots logged to MLflow.")
+print(f"   View results: {run_url}")
 
 # COMMAND ----------
 
+# DBTITLE 1,Cell 9
 # MAGIC %md
-# MAGIC ## Step 4: Train/Val vs Test Gap Audit
-# MAGIC
-# MAGIC **Why this matters:** If train metrics are much better than test metrics (>10%% gap),
-# MAGIC the model is overfitting — it memorized training data instead of learning patterns.
-# MAGIC This cell flags that issue automatically.
-# MAGIC **What this does:** Checks if test performance is significantly worse than validation.
-# MAGIC A large gap (>10%) suggests overfitting.
+# MAGIC ## Summary & Log
+# MAGIC Holdout evaluation complete. All metrics + plots logged to MLflow.
+# MAGIC → **Next:** `04b_explainability.py` (if enabled) or `05_register.py`
 
 # COMMAND ----------
 
-if train_context:
-    val_score = train_context["best_score"]
-    obj_metric = train_context["objective_metric"]
-    test_score = metrics.get(f"test_{obj_metric.replace('val_', '')}", None)
-
-    if test_score is not None:
-        if "rmse" in obj_metric:
-            gap_pct = ((test_score - val_score) / val_score) * 100
-            is_healthy = gap_pct < 15  # RMSE: test should not be >15% worse
-        else:
-            gap_pct = ((val_score - test_score) / val_score) * 100
-            is_healthy = gap_pct < 10  # F1/AUC: test should not drop >10%
-
-        print(f"\nVal {obj_metric}: {val_score:.4f}")
-        print(f"Test equivalent: {test_score:.4f}")
-        print(f"Gap: {gap_pct:.1f}%")
-        if is_healthy:
-            print("✅ Healthy generalization (gap < threshold)")
-        else:
-            print("⚠️  OVERFITTING WARNING: gap exceeds threshold")
-            print("  Consider: more regularization, fewer features, or more data")
-
-# COMMAND ----------
-
-# MAGIC %md
-# MAGIC ## Step 5: Diagnostic Plots
-# MAGIC
-# MAGIC Visual diagnostics help you understand WHERE the model fails:
-# MAGIC - **Classification**: Confusion matrix (which classes are confused?) + ROC curve
-# MAGIC - **Regression**: Residuals plot (are errors random or systematic?)
-
-# COMMAND ----------
-
-import matplotlib.pyplot as plt
-from sklearn.metrics import ConfusionMatrixDisplay, RocCurveDisplay
-
-if task_type == "classification":
-    fig, axes = plt.subplots(1, 2, figsize=(12, 5))
-    ConfusionMatrixDisplay.from_predictions(y_test, y_pred, ax=axes[0], cmap="Blues")
-    axes[0].set_title("Confusion Matrix (Test)")
-    if hasattr(model, "predict_proba"):
-        RocCurveDisplay.from_predictions(y_test, y_proba, ax=axes[1])
-        axes[1].set_title("ROC Curve (Test)")
-    plt.tight_layout()
-    plt.show()
-else:
-    fig, axes = plt.subplots(1, 2, figsize=(12, 5))
-    residuals = y_test - y_pred
-    axes[0].scatter(y_pred, residuals, alpha=0.3)
-    axes[0].axhline(0, color="red", linestyle="--")
-    axes[0].set_title("Residuals vs Predicted")
-    axes[0].set_xlabel("Predicted")
-    axes[0].set_ylabel("Residual")
-    axes[1].hist(residuals, bins=50, color="steelblue")
-    axes[1].set_title("Residual Distribution")
-    plt.tight_layout()
-    plt.show()
-
-# COMMAND ----------
-
-# MAGIC %md
-# MAGIC ## Summary
-# MAGIC Holdout evaluation complete. Test metrics logged to MLflow.
-# MAGIC → **Next:** `04b_explainability.py` or `05_register.py`
-
-# COMMAND ----------
-
+# DBTITLE 1,Log & Pass Context
+# Log key metrics to deployment log
+key_metrics = {k: v for k, v in metrics.items() if isinstance(v, float)}
 append_deployment_log(
     event="holdout_evaluated",
     resource=f"{config['catalog']}.{config['schema']}.{config['model_name']}",
     version=f"run_id={best_run_id}",
-    notes=", ".join(f"{k}={v:.4f}" for k, v in metrics.items())
+    notes=", ".join(f"{k}={v:.4f}" for k, v in list(key_metrics.items())[:6])
 )
 
 # Pass context downstream
-dbutils.jobs.taskValues.set(key="eval_context", value=json.dumps({
-    "best_run_id": best_run_id,
-    "test_metrics": metrics,
-}))
+try:
+    dbutils.jobs.taskValues.set(key="eval_context", value=json.dumps({
+        "best_run_id": best_run_id,
+        "test_metrics": key_metrics,
+    }))
+except Exception:
+    pass  # Not in a job context

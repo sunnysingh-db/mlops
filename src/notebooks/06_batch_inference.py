@@ -1,4 +1,9 @@
 # Databricks notebook source
+# /// script
+# [tool.databricks.environment]
+# base_environment = "databricks_ml_v5"
+# environment_version = "5"
+# ///
 # MAGIC %md
 # MAGIC # 06 — Batch Inference
 # MAGIC
@@ -33,6 +38,16 @@
 # MAGIC ## Next Steps
 # MAGIC → `08_monitor.py` (data drift monitoring)
 # MAGIC → `07_serve.py` (if real-time serving needed)
+
+# COMMAND ----------
+
+# DBTITLE 1,Install dependencies
+# MAGIC %pip install pyyaml mlflow databricks-feature-engineering lightgbm --quiet
+
+# COMMAND ----------
+
+# DBTITLE 1,Restart Python
+# MAGIC %restart_python
 
 # COMMAND ----------
 
@@ -107,6 +122,20 @@ print(f"✅ Scoring complete: {predictions_df.count():,} predictions generated")
 
 # COMMAND ----------
 
+# DBTITLE 1,Write Predictions
+# Join ground truth labels if available (enables model quality metrics in monitoring)
+# Labels are cast to DOUBLE to match the prediction column type (required by Lakehouse Monitor)
+label_col = config.get("label_column")
+training_table = config["train"].get("training_table")
+if label_col and training_table:
+    from pyspark.sql.functions import col as _col
+    labels_df = spark.table(training_table).select(config["entity_key"], _col(label_col).cast("double").alias(label_col))
+    predictions_df = predictions_df.join(labels_df, on=config["entity_key"], how="left")
+    # Force evaluation to catch errors early
+    _ = predictions_df.limit(1).collect()
+    print(f"✅ Ground truth '{label_col}' joined as DOUBLE from {training_table}")
+
+# Append mode: preserves historical predictions for monitoring drift over time
 predictions_df.write.mode("append").saveAsTable(config["batch"]["output_table"])
 print(f"✅ Predictions written to: {config['batch']['output_table']}")
 

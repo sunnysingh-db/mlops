@@ -24,6 +24,16 @@
 
 # COMMAND ----------
 
+# DBTITLE 1,Install dependencies
+# MAGIC %pip install databricks-feature-engineering --quiet
+
+# COMMAND ----------
+
+# DBTITLE 1,Restart Python kernel
+# MAGIC %restart_python
+
+# COMMAND ----------
+
 # Setup & Config
 import sys
 from pathlib import Path
@@ -101,30 +111,18 @@ print(f"Output table:   {feature_table_name}")
 # features_df = txn_features.join(profile_features, on="customer_id", how="left")
 
 # ─── YOUR CODE HERE ──────────────────────────────────────────────────────────
-features_df = spark.sql(f"""
-    SELECT
-        customer_id,
-        event_date,
-        monthly_sessions,
-        monthly_transactions,
-        avg_order_value,
-        days_since_last_session,
-        total_spend_90d,
-        support_tickets,
-        email_opens_30d,
-        subscription_months
-    FROM {config['catalog']}.{config['schema']}.customer_activity
-""")
+# Read from source table, excluding the label column (label stays in the source
+# table for training — the FE Client joins features at train time)
+label_col = config.get("label_column", "")
+source_table = config["train"]["training_table"]
 
-# COMMAND ----------
+all_cols = spark.table(source_table).columns
+feature_cols = [c for c in all_cols if c != label_col]
 
-# DBTITLE 1,Install feature engineering library
-# MAGIC %pip install databricks-feature-engineering --quiet
-
-# COMMAND ----------
-
-# DBTITLE 1,Restart Python kernel
-# MAGIC %restart_python
+features_df = spark.table(source_table).select(*feature_cols)
+print(f"Source table: {source_table}")
+print(f"Label column excluded: {label_col}")
+print(f"Feature columns: {len(feature_cols) - 2} (+ entity_key + timestamp_key)")
 
 # COMMAND ----------
 
@@ -152,13 +150,14 @@ try:
     print(f"✅ Feature table CREATED: {feature_table_name}")
 except Exception as e:
     if "already exists" in str(e).lower():
-        # Subsequent runs: overwrite existing feature table
+        # Subsequent runs: merge (upsert) — update existing entities, insert new ones.
+        # This is idempotent (safe to re-run) and handles incremental new data.
         fe.write_table(
             name=feature_table_name,
             df=features_df,
-            mode="overwrite",
+            mode="merge",
         )
-        print(f"✅ Feature table UPDATED: {feature_table_name}")
+        print(f"✅ Feature table MERGED: {feature_table_name}")
     else:
         raise
 

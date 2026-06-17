@@ -1,14 +1,9 @@
 # Databricks notebook source
-# DBTITLE 1,Install dependencies
-# MAGIC %pip install optuna lightgbm databricks-feature-engineering --quiet
-
-# COMMAND ----------
-
-# DBTITLE 1,Restart Python kernel
-# MAGIC %restart_python
-
-# COMMAND ----------
-
+# /// script
+# [tool.databricks.environment]
+# base_environment = "databricks_ml_v5"
+# environment_version = "5"
+# ///
 # MAGIC %md
 # MAGIC # 03 — Train & Tune Model
 # MAGIC
@@ -39,6 +34,16 @@
 # MAGIC
 # MAGIC ## Next Step
 # MAGIC → `04_evaluate.py`
+
+# COMMAND ----------
+
+# DBTITLE 1,Install dependencies
+# MAGIC %pip install optuna lightgbm xgboost catboost databricks-feature-engineering --quiet
+
+# COMMAND ----------
+
+# DBTITLE 1,Restart Python kernel
+# MAGIC %restart_python
 
 # COMMAND ----------
 
@@ -86,6 +91,7 @@ print(f"Splits:      {split_ratios}")
 
 # COMMAND ----------
 
+# DBTITLE 1,Create Training Set via FE Client
 from databricks.feature_engineering import FeatureEngineeringClient
 import mlflow
 
@@ -94,9 +100,18 @@ fe = FeatureEngineeringClient()
 # Build feature lookups from config
 feature_lookups = get_feature_lookups(config)
 
+# Load labels from the source table (only entity_key + timestamp_key + label).
+# The source table may contain features too, but we only need labels here —
+# the FE Client joins features from the Feature Store via feature_lookups.
+labels_df = spark.table(training_table).select(entity_key, timestamp_key, label_column)
+
+# For incremental retraining, filter labels by time instead:
+# from pyspark.sql import functions as F
+# labels_df = spark.table(training_table).select(entity_key, timestamp_key, label_column).where(F.col(timestamp_key) > "2026-05-01")
+
 # Create training set (point-in-time join)
 training_set = fe.create_training_set(
-    df=spark.table(training_table),
+    df=labels_df,
     feature_lookups=feature_lookups,
     label=label_column,
 )
@@ -167,6 +182,7 @@ print("✅ Test split saved (locked for 04_evaluate.py)")
 
 # COMMAND ----------
 
+# DBTITLE 1,Cell 10
 from sklearn.compose import ColumnTransformer
 from sklearn.preprocessing import StandardScaler, OneHotEncoder
 from sklearn.pipeline import Pipeline
@@ -261,6 +277,7 @@ print("\n✅ Baselines logged")
 
 # COMMAND ----------
 
+# DBTITLE 1,Cell 14
 import optuna
 from optuna.samplers import TPESampler
 from optuna.pruners import MedianPruner
@@ -298,8 +315,12 @@ if model_algorithm in ["lightgbm", "all"]:
     algorithms_to_run.append("lightgbm")
 if model_algorithm in ["xgboost", "all"]:
     algorithms_to_run.append("xgboost")
+if model_algorithm in ["catboost", "all"]:
+    algorithms_to_run.append("catboost")
 if model_algorithm in ["random_forest", "all"]:
     algorithms_to_run.append("random_forest")
+if model_algorithm in ["elasticnet", "all"]:
+    algorithms_to_run.append("elasticnet")
 
 print(f"Algorithms: {algorithms_to_run}")
 
@@ -310,6 +331,7 @@ print(f"Algorithms: {algorithms_to_run}")
 
 # COMMAND ----------
 
+# DBTITLE 1,Cell 16
 from sklearn.metrics import f1_score, average_precision_score, mean_squared_error
 
 def create_objective(algorithm: str):
@@ -359,6 +381,26 @@ def create_objective(algorithm: str):
             else:
                 model = xgb.XGBRegressor(**params, eval_metric="rmse")
 
+        elif algorithm == "catboost":
+            from catboost import CatBoostClassifier, CatBoostRegressor
+            params = {
+                "learning_rate": trial.suggest_float("learning_rate", 0.01, 0.3, log=True),
+                "iterations": trial.suggest_int("iterations", 100, 1000, step=50),
+                "depth": trial.suggest_int("depth", 3, 10),
+                "l2_leaf_reg": trial.suggest_float("l2_leaf_reg", 1e-3, 10.0, log=True),
+                "bagging_temperature": trial.suggest_float("bagging_temperature", 0.0, 1.0),
+                "random_strength": trial.suggest_float("random_strength", 1e-3, 10.0, log=True),
+                "border_count": trial.suggest_int("border_count", 32, 255),
+                "random_seed": 42,
+                "verbose": 0,
+                "thread_count": cores_per_trial,
+            }
+            if task_type == "classification":
+                params["auto_class_weights"] = trial.suggest_categorical("auto_class_weights", ["Balanced", "SqrtBalanced", None])
+                model = CatBoostClassifier(**params)
+            else:
+                model = CatBoostRegressor(**params)
+
         elif algorithm == "random_forest":
             from sklearn.ensemble import RandomForestClassifier, RandomForestRegressor
             params = {
@@ -375,6 +417,30 @@ def create_objective(algorithm: str):
                 model = RandomForestClassifier(**params)
             else:
                 model = RandomForestRegressor(**params)
+
+        elif algorithm == "elasticnet":
+            from sklearn.linear_model import LogisticRegression, ElasticNet as ElasticNetRegressor
+            if task_type == "classification":
+                # LogisticRegression with elasticnet penalty (covers L1, L2, and mix)
+                params = {
+                    "C": trial.suggest_float("C", 1e-4, 100.0, log=True),
+                    "l1_ratio": trial.suggest_float("l1_ratio", 0.0, 1.0),
+                    "penalty": "elasticnet",
+                    "solver": "saga",
+                    "max_iter": 2000,
+                    "class_weight": trial.suggest_categorical("class_weight", ["balanced", None]),
+                    "random_state": 42,
+                    "n_jobs": cores_per_trial,
+                }
+                model = LogisticRegression(**params)
+            else:
+                params = {
+                    "alpha": trial.suggest_float("alpha", 1e-5, 10.0, log=True),
+                    "l1_ratio": trial.suggest_float("l1_ratio", 0.0, 1.0),
+                    "max_iter": 2000,
+                    "random_state": 42,
+                }
+                model = ElasticNetRegressor(**params)
 
         # Build pipeline with preprocessing
         pipe = Pipeline([("preprocessor", preprocessor), ("model", model)])
@@ -407,12 +473,24 @@ def create_objective(algorithm: str):
 
 # COMMAND ----------
 
+# DBTITLE 1,Run HPO
+import warnings
+warnings.filterwarnings("ignore")
+optuna.logging.set_verbosity(optuna.logging.ERROR)
+
 best_results = {}  # algorithm -> (study, best_score, best_params)
 
+def trial_callback(study, trial):
+    """Print progress after each completed trial."""
+    best_so_far = study.best_value
+    marker = " ⭐ NEW BEST" if trial.value == best_so_far else ""
+    print(f"  Trial {trial.number + 1:>3}/{n_trials} | {objective_metric}: {trial.value:.4f} | best so far: {best_so_far:.4f}{marker}")
+
 for algorithm in algorithms_to_run:
-    print(f"\n{'=' * 50}")
-    print(f"  HPO: {algorithm} ({n_trials} trials, {n_jobs} parallel)")
-    print(f"{'=' * 50}")
+    print(f"\n{'=' * 60}")
+    print(f"  🚀 HPO: {algorithm.upper()}")
+    print(f"     Trials: {n_trials} | Parallel: {n_jobs} | Metric: {objective_metric}")
+    print(f"{'=' * 60}")
 
     with mlflow.start_run(run_name=f"hpo_{algorithm}"):
         study = optuna.create_study(
@@ -424,7 +502,7 @@ for algorithm in algorithms_to_run:
             create_objective(algorithm),
             n_trials=n_trials,
             n_jobs=n_jobs,
-            show_progress_bar=True,
+            callbacks=[trial_callback],
         )
 
         best_score = study.best_value
@@ -433,7 +511,16 @@ for algorithm in algorithms_to_run:
         mlflow.log_params({"algorithm": algorithm, "n_trials": n_trials})
 
     best_results[algorithm] = (study, best_score, best_params)
-    print(f"  Best {objective_metric}: {best_score:.4f}")
+    print(f"\n  ✅ {algorithm} complete | Best {objective_metric}: {best_score:.4f}")
+    print(f"     Params: {best_params}")
+
+# Summary table
+print(f"\n{'=' * 60}")
+print(f"  HPO SUMMARY")
+print(f"{'=' * 60}")
+for algo, (_, score, _) in sorted(best_results.items(), key=lambda x: x[1][1], reverse=(objective_direction == "maximize")):
+    print(f"  {algo:20s} {objective_metric} = {score:.4f}")
+print(f"{'=' * 60}")
 
 # COMMAND ----------
 
@@ -444,6 +531,9 @@ for algorithm in algorithms_to_run:
 
 # COMMAND ----------
 
+# DBTITLE 1,Cell 20
+import warnings
+warnings.filterwarnings("ignore")
 from mlflow.models import infer_signature
 
 # Pick overall best
@@ -455,27 +545,71 @@ else:
 winner_score = best_results[winner][1]
 winner_params = best_results[winner][2]
 
-print(f"\n✅ WINNER: {winner} ({objective_metric} = {winner_score:.4f})")
-print(f"  Params: {winner_params}")
-
 # Retrain winner on full train set with best params
+print(f"Retraining {winner} on full training set...")
 if winner == "lightgbm":
     import lightgbm as lgb
     ModelClass = lgb.LGBMClassifier if task_type == "classification" else lgb.LGBMRegressor
+    final_model = ModelClass(**winner_params, random_state=42, n_jobs=-1, verbose=-1)
 elif winner == "xgboost":
     import xgboost as xgb
     ModelClass = xgb.XGBClassifier if task_type == "classification" else xgb.XGBRegressor
+    final_model = ModelClass(**winner_params, random_state=42, n_jobs=-1, verbosity=0)
+elif winner == "catboost":
+    from catboost import CatBoostClassifier, CatBoostRegressor
+    ModelClass = CatBoostClassifier if task_type == "classification" else CatBoostRegressor
+    final_model = ModelClass(**winner_params, random_seed=42, verbose=0)
 elif winner == "random_forest":
     from sklearn.ensemble import RandomForestClassifier, RandomForestRegressor
     ModelClass = RandomForestClassifier if task_type == "classification" else RandomForestRegressor
+    final_model = ModelClass(**winner_params, random_state=42, n_jobs=-1)
+elif winner == "elasticnet":
+    from sklearn.linear_model import LogisticRegression, ElasticNet as ElasticNetRegressor
+    if task_type == "classification":
+        final_model = LogisticRegression(**winner_params, random_state=42)
+    else:
+        final_model = ElasticNetRegressor(**winner_params, random_state=42)
 
-final_model = ModelClass(**winner_params, random_state=42, n_jobs=-1)
 final_pipeline = Pipeline([("preprocessor", preprocessor), ("model", final_model)])
 final_pipeline.fit(X_train, y_train)
 
+# Compute comprehensive metrics on both train and validation sets
+from sklearn.metrics import (
+    f1_score, precision_score, recall_score, accuracy_score,
+    roc_auc_score, average_precision_score, log_loss,
+    mean_squared_error, mean_absolute_error, r2_score,
+)
+
+def compute_metrics(pipeline, X, y, prefix, task_type, pos_label):
+    """Compute all relevant metrics for a dataset split."""
+    y_pred = pipeline.predict(X)
+    metrics = {}
+    if task_type == "classification":
+        metrics[f"{prefix}_accuracy"] = accuracy_score(y, y_pred)
+        metrics[f"{prefix}_f1"] = f1_score(y, y_pred, pos_label=pos_label)
+        metrics[f"{prefix}_precision"] = precision_score(y, y_pred, pos_label=pos_label, zero_division=0)
+        metrics[f"{prefix}_recall"] = recall_score(y, y_pred, pos_label=pos_label, zero_division=0)
+        if hasattr(pipeline, "predict_proba"):
+            y_proba = pipeline.predict_proba(X)[:, 1]
+            metrics[f"{prefix}_roc_auc"] = roc_auc_score(y, y_proba)
+            metrics[f"{prefix}_pr_auc"] = average_precision_score(y, y_proba)
+            metrics[f"{prefix}_log_loss"] = log_loss(y, y_proba)
+    else:
+        from sklearn.metrics import median_absolute_error, mean_absolute_percentage_error, explained_variance_score
+        metrics[f"{prefix}_rmse"] = mean_squared_error(y, y_pred, squared=False)
+        metrics[f"{prefix}_mae"] = mean_absolute_error(y, y_pred)
+        metrics[f"{prefix}_median_ae"] = median_absolute_error(y, y_pred)
+        metrics[f"{prefix}_mape"] = mean_absolute_percentage_error(y, y_pred)
+        metrics[f"{prefix}_r2"] = r2_score(y, y_pred)
+        metrics[f"{prefix}_explained_var"] = explained_variance_score(y, y_pred)
+    return metrics
+
+train_metrics = compute_metrics(final_pipeline, X_train, y_train, "train", task_type, positive_label)
+val_metrics = compute_metrics(final_pipeline, X_val, y_val, "val", task_type, positive_label)
+all_metrics = {**train_metrics, **val_metrics}
+
 # Log via FE Client
 with mlflow.start_run(run_name=f"best_model_{winner}") as run:
-    # Log environment and config metadata
     env_params = get_environment_params(config)
     mlflow.log_params(env_params)
     mlflow.log_params({
@@ -487,13 +621,11 @@ with mlflow.start_run(run_name=f"best_model_{winner}") as run:
         "feature_table": feature_table_name,
     })
     mlflow.log_params(winner_params)
-    mlflow.log_metric(f"best_{objective_metric}", winner_score)
+    mlflow.log_metrics(all_metrics)
 
-    # Infer signature
     signature = infer_signature(X_train.head(5), final_pipeline.predict(X_train.head(5)))
     input_example = X_train.head(3)
 
-    # Log model via FE Client for lineage
     fe.log_model(
         model=final_pipeline,
         artifact_path="model",
@@ -502,9 +634,38 @@ with mlflow.start_run(run_name=f"best_model_{winner}") as run:
         signature=signature,
         input_example=input_example,
     )
-
     best_run_id = run.info.run_id
-    print(f"\n✅ Model logged: runs:/{best_run_id}/model")
+
+# Clean summary
+print(f"\n{'=' * 60}")
+print(f"  TRAINING COMPLETE")
+print(f"{'=' * 60}")
+print(f"  Algorithm:   {winner}")
+print(f"  Run ID:      {best_run_id}")
+print(f"{'\u2500' * 60}")
+print(f"  {'Metric':<20s} {'Train':>10s} {'Validation':>10s} {'Overfit?':>10s}")
+print(f"  {'\u2500' * 52}")
+
+# Metrics where higher = better (overfit = train >> val)
+higher_is_better = {"accuracy", "f1", "precision", "recall", "roc_auc", "pr_auc", "r2", "explained_var"}
+
+for key in sorted(train_metrics.keys()):
+    metric_name = key.replace("train_", "")
+    t_val = train_metrics[key]
+    v_key = f"val_{metric_name}"
+    v_val = val_metrics.get(v_key, None)
+    if v_val is not None:
+        # Detect overfitting using relative gap
+        if metric_name in higher_is_better:
+            # Higher = better: overfit if train >> val
+            gap = t_val - v_val
+            flag = "⚠️" if gap > 0.10 else ""
+        else:
+            # Lower = better (rmse, mae, log_loss, mape): overfit if train << val
+            rel_gap = (v_val - t_val) / max(abs(v_val), 1e-8)
+            flag = "⚠️" if rel_gap > 0.20 else ""  # 20% relative degradation
+        print(f"  {metric_name:<20s} {t_val:>10.4f} {v_val:>10.4f} {flag:>10s}")
+print(f"{'=' * 60}")
 
 # COMMAND ----------
 
